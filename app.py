@@ -16,7 +16,6 @@ from PIL import Image, ImageOps
 
 try:  # dukungan foto HEIC dari iPhone
     from pillow_heif import register_heif_opener
-
     register_heif_opener()
 except Exception:  # noqa: BLE001
     pass
@@ -83,7 +82,8 @@ def proses(data: bytes, mode: str, bahasa: str, psm: int, yang_dibaca: str):
     arr = preprocess(data, mode)
     config = f"--oem 3 --psm {psm}"
     if yang_dibaca == "Hanya angka":
-        config += " -c tessedit_char_whitelist=0123456789.,-/:"
+        # PERBAIKAN 1: Tambahkan SPASI di akhir whitelist agar angka tidak saling tempel
+        config += ' -c tessedit_char_whitelist="0123456789.,-/: "'
     teks = pytesseract.image_to_string(arr, lang=bahasa, config=config).strip()
     return arr, teks
 
@@ -91,9 +91,12 @@ def proses(data: bytes, mode: str, bahasa: str, psm: int, yang_dibaca: str):
 def cari_info(teks: str) -> dict:
     tanggal = re.findall(r"\b\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}\b", teks)
     nominal = re.findall(r"(?:Rp\.?\s?)?\d{1,3}(?:[.,]\d{3})+(?:,\d{2})?", teks)
+    
+    # PERBAIKAN 2: Ubah tanda koma (", ") menjadi enter ("\n")
+    # Agar angka-angka yang ditemukan turun ke bawah (vertikal)
     return {
-        "Tanggal": ", ".join(dict.fromkeys(tanggal)),
-        "Nominal": ", ".join(dict.fromkeys(n.strip() for n in nominal)),
+        "Tanggal": "\n".join(dict.fromkeys(tanggal)),
+        "Nominal": "\n".join(dict.fromkeys(n.strip() for n in nominal)),
     }
 
 
@@ -151,36 +154,54 @@ for i, (nama, data) in enumerate(items, start=1):
             continue
 
         st.image(arr, caption="Gambar setelah pra-proses", use_container_width=True)
-        teks_edit = st.text_area("Hasil (bisa diedit)", teks, height=220, key=f"t{i}")
+        teks_edit = st.text_area("Hasil Lengkap (Bisa diedit)", teks, height=200, key=f"t{i}")
+        
         info = cari_info(teks_edit) if cari_data else {}
+        
+        # PERBAIKAN 3: Tampilkan hasil pencarian sebagai list ke bawah agar rapi
         if info:
-            st.write(info)
+            st.markdown("### 📌 Data Ditemukan:")
+            if info.get("Tanggal"):
+                st.markdown("**📅 Tanggal:**")
+                for tgl in info["Tanggal"].split("\n"):
+                    st.markdown(f"- {tgl}")
+                    
+            if info.get("Nominal"):
+                st.markdown("**💰 Nominal Angka:**")
+                for nom in info["Nominal"].split("\n"):
+                    st.markdown(f"- **{nom}**")
+                    
         hasil.append({"File": nama, "Teks": teks_edit, **info})
 
 # ---------- Unduh ----------
 if hasil:
     st.divider()
     df = pd.DataFrame(hasil)
-    st.subheader("Rekap")
+    st.subheader("Rekap Data")
     st.dataframe(df, use_container_width=True)
+    
     if st.button("💾 Simpan ke Google Sheet", type="primary", use_container_width=True):
         with st.spinner("Menyimpan..."):
             ok, pesan = simpan_ke_sheet(hasil)
         (st.success if ok else st.error)(pesan)
-    st.download_button(
-        "⬇️ Unduh CSV",
-        df.to_csv(index=False).encode("utf-8-sig"),
-        "hasil_ocr.csv",
-        "text/csv",
-        use_container_width=True,
-    )
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        df.to_excel(w, index=False)
-    st.download_button(
-        "⬇️ Unduh Excel",
-        buf.getvalue(),
-        "hasil_ocr.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
+        
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button(
+            "⬇️ Unduh CSV",
+            df.to_csv(index=False).encode("utf-8-sig"),
+            "hasil_ocr.csv",
+            "text/csv",
+            use_container_width=True,
+        )
+    with col2:
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as w:
+            df.to_excel(w, index=False)
+        st.download_button(
+            "⬇️ Unduh Excel",
+            buf.getvalue(),
+            "hasil_ocr.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
