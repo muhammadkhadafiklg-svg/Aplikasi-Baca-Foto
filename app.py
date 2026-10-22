@@ -14,7 +14,7 @@ import requests
 import streamlit as st
 from PIL import Image, ImageOps
 
-try:  # dukungan foto HEIC dari iPhone
+try:  
     from pillow_heif import register_heif_opener
     register_heif_opener()
 except Exception:  # noqa: BLE001
@@ -28,7 +28,7 @@ st.set_page_config(
 )
 
 st.title("📷 Scanner Laporan Setoran")
-st.caption("Upload foto struk, sistem akan otomatis mengekstrak Total Setoran.")
+st.caption("Upload foto struk, sistem akan mengekstrak Rincian dan Total Setoran.")
 
 # ---------- Pengaturan ----------
 with st.expander("⚙️ Pengaturan Pembacaan", expanded=False):
@@ -36,8 +36,7 @@ with st.expander("⚙️ Pengaturan Pembacaan", expanded=False):
         "Yang dibaca",
         ["Teks + angka", "Hanya angka"],
         horizontal=True,
-        index=0, # Wajib Teks + Angka agar bisa membaca kata "TOTAL SETORAN"
-        help="Gunakan 'Teks + angka' agar sistem bisa mengenali format struk.",
+        index=0, 
     )
     mode = st.radio(
         "Pra-proses gambar",
@@ -107,31 +106,29 @@ def proses(data: bytes, mode: str, bahasa: str, psm: int, yang_dibaca: str):
 def cari_info(teks: str) -> dict:
     info = {}
     
-    # 1. Ekstrak Tanggal Khusus Format Struk (misal: 15 OCT,26)
-    match_tgl = re.search(r"DATE/?TIME[^\d]*([0-9]{1,2}\s*[A-Za-z]{3}\s*,\s*[0-9]{2,4})", teks, re.IGNORECASE)
-    if match_tgl:
-        info["Tanggal"] = match_tgl.group(1).strip()
-    else:
-        # Fallback format tanggal standar
-        tanggal = re.findall(r"\b\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}\b", teks)
-        if tanggal:
-            info["Tanggal"] = "\n".join(dict.fromkeys(tanggal))
-            
-    # 2. Ekstrak JOB ID (Referensi Struk)
-    match_job = re.search(r"JOB\s+ID[^\d]*([0-9]+)", teks, re.IGNORECASE)
-    if match_job:
-        info["Job ID"] = match_job.group(1).strip()
-
-    # 3. Ekstrak TOTAL SETORAN
-    # Mencari kata "TOTAL SETORAN", mengabaikan teks di antaranya (seperti Rp.), dan mengambil angkanya
+    # 1. Ekstrak Total Setoran
     match_total = re.search(r"TOTAL\s+SETORAN[^\d]*([0-9.,]+)", teks, re.IGNORECASE)
     if match_total:
         info["Total Setoran"] = match_total.group(1).strip()
-    else:
-        # Jika "TOTAL SETORAN" tidak terbaca jelas, cari dan tampilkan semua nominal sebagai cadangan
-        nominal = re.findall(r"(?:Rp\.?\s?)?\d{1,3}(?:[.,]\d{3})+(?:,\d{2})?", teks)
-        if nominal:
-            info["Semua Nominal Terbaca"] = "\n".join(dict.fromkeys(n.strip() for n in nominal))
+        
+    # 2. Ekstrak Blok Rincian (NO REK, Nominal, dan BERITA)
+    # Mencari pola "NO REK : xxx" dan "Rp. yyy"
+    rincian_rek = re.findall(r"NO\s*REK\s*:\s*([0-9*]+)[^\dRp]*(?:Rp\.?\s*)?([0-9.,]+)", teks, re.IGNORECASE)
+    # Mencari pola "BERITA zzz"
+    rincian_berita = re.findall(r"BERITA\s+(.+)", teks, re.IGNORECASE)
+    
+    if rincian_rek:
+        hasil_rincian = []
+        for i in range(len(rincian_rek)):
+            rek = rincian_rek[i][0]
+            nominal = rincian_rek[i][1]
+            # Pasangkan dengan baris BERITA jika ada, jika tidak isi dengan "-"
+            berita = rincian_berita[i].strip() if i < len(rincian_berita) else "-"
+            
+            # Format teks ini yang akan muncul di layar dan masuk ke kolom Excel/CSV
+            hasil_rincian.append(f"No. Rek: {rek} | Rp.{nominal} | Berita: {berita}")
+            
+        info["Rincian Transaksi"] = "\n".join(hasil_rincian)
 
     return info
 
@@ -190,32 +187,25 @@ for i, (nama, data) in enumerate(items, start=1):
 
         st.image(arr, caption=f"Gambar diproses mode: {mode}", use_container_width=True)
         
-        # --- PERUBAHAN UTAMA: Teks Dibuat Read-Only (Tidak bisa diedit) ---
+        # Teks Mentah (Read-Only)
         st.markdown("**Teks Mentah Terbaca (Read-Only):**")
         st.code(teks, language="text") 
-        # -------------------------------------------------------------------
         
         info = cari_info(teks) if cari_data else {}
         
-        # Tampilkan ekstraksi data dengan rapi
+        # Tampilkan ekstraksi data di UI
         if info:
             st.markdown("### 📌 Data Laporan Terdeteksi:")
             
-            if info.get("Tanggal"):
-                st.info(f"**📅 Tanggal Struk:** {info['Tanggal']}")
-                
-            if info.get("Job ID"):
-                st.info(f"**🆔 Job ID:** {info['Job ID']}")
-                
+            if info.get("Rincian Transaksi"):
+                st.markdown("**📝 Rincian Penyetoran:**")
+                # Menampilkan rincian sebagai bullet points agar rapi di layar
+                for rincian in info["Rincian Transaksi"].split("\n"):
+                    st.info(rincian)
+                    
             if info.get("Total Setoran"):
                 st.success(f"**💰 TOTAL SETORAN:** Rp. {info['Total Setoran']}")
-            elif info.get("Semua Nominal Terbaca"):
-                st.warning("**⚠️ Baris 'TOTAL SETORAN' tidak terbaca jelas. Berikut nominal yang ditemukan:**")
-                for nom in info["Semua Nominal Terbaca"].split("\n"):
-                    st.markdown(f"- **{nom}**")
                     
-        # Saat menyimpan hasil mentah, gabungkan teks agar aman di CSV
-        # Info spesifik juga otomatis jadi kolom baru di DataFrame!
         hasil.append({"File": nama, "Teks Mentah": teks, **info})
 
 # ---------- Unduh & Simpan ----------
