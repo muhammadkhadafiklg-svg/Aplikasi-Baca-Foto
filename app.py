@@ -28,7 +28,7 @@ try:
     genai.configure(api_key=GEMINI_API_KEY)
     
     # Menggunakan model Gemini 1.5 Flash (Sangat cepat dan jago baca gambar)
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    model = genai.GenerativeModel('gemini-1.5-pro')
 except Exception as e:
     st.error("⚠️ GEMINI_API_KEY belum dipasang di secrets.toml!")
     st.stop()
