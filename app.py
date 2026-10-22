@@ -1,148 +1,86 @@
-"""Baca Foto (OCR) - versi HP. 100% gratis.
-Tools: Python, Streamlit, Tesseract OCR, OpenCV, Pillow, pandas.
-Jalankan lokal: streamlit run app.py
+"""Scanner Laporan Setoran - Powered by Gemini AI
+Lebih akurat, anti-coretan, dan memahami konteks struk.
 """
 import io
 import json
-import re
-
-import cv2
-import numpy as np
 import pandas as pd
-import pytesseract
 import requests
 import streamlit as st
-from PIL import Image, ImageOps
+from PIL import Image
 
-try:  
-    from pillow_heif import register_heif_opener
-    register_heif_opener()
-except Exception:  # noqa: BLE001
-    pass
+# Import library Google Gemini
+import google.generativeai as genai
 
 st.set_page_config(
-    page_title="Scanner Laporan Setoran",
-    page_icon="📷",
+    page_title="Scanner Laporan Setoran (AI)",
+    page_icon="🤖",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
 
-st.title("📷 Scanner Laporan Setoran")
-st.caption("Upload foto struk, sistem akan otomatis mengekstrak Rincian dan Total Setoran.")
+st.title("🤖 Scanner Laporan (Gemini AI)")
+st.caption("Upload foto struk. AI akan menembus coretan dan mencari nominal secara cerdas.")
 
-# ---------- Pengaturan ----------
-with st.expander("⚙️ Pengaturan Pembacaan", expanded=False):
-    yang_dibaca = st.radio(
-        "Yang dibaca",
-        ["Teks + angka", "Hanya angka"],
-        horizontal=True,
-        index=0, 
-    )
-    mode = st.radio(
-        "Pra-proses gambar",
-        ["Asli", "Grayscale", "Hitam-putih"],
-        index=1, 
-        horizontal=True,
-    )
-    bahasa = st.selectbox("Bahasa teks di foto", ["ind+eng", "ind", "eng"])
-    psm_label = st.selectbox(
-        "Jenis tata letak",
-        [
-            "6 - Blok teks (Default Struk)", 
-            "4 - Kolom", 
-            "11 - Teks tersebar",
-            "3 - Otomatis"
-        ],
-        index=0
-    )
-    psm_value = int(psm_label.split(" ")[0])
-    cari_data = st.checkbox("Otomatis ekstrak format struk", value=True)
-
-
-# ---------- Fungsi ----------
-def preprocess(data: bytes, mode: str) -> np.ndarray:
-    img = Image.open(io.BytesIO(data))
-    img = ImageOps.exif_transpose(img).convert("RGB")
-    arr = np.array(img)
+# ---------- Konfigurasi AI ----------
+try:
+    # Mengambil API Key dari secrets
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+    genai.configure(api_key=GEMINI_API_KEY)
     
-    h, w = arr.shape[:2]
-    sisi_panjang = max(h, w)
-    if sisi_panjang > 2000:  
-        s = 2000 / sisi_panjang
-        arr = cv2.resize(arr, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
-    elif sisi_panjang < 1200: 
-        s = 1500 / sisi_panjang 
-        arr = cv2.resize(arr, None, fx=s, fy=s, interpolation=cv2.INTER_CUBIC)
-        
-    if mode == "Asli":
-        return arr
-        
-    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-    
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    gray = clahe.apply(gray)
-    
-    if mode == "Grayscale":
-        return gray
-        
-    gray = cv2.GaussianBlur(gray, (5, 5), 0)
-    return cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 11
-    )
+    # Menggunakan model Gemini 1.5 Flash (Sangat cepat dan jago baca gambar)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except Exception as e:
+    st.error("⚠️ GEMINI_API_KEY belum dipasang di secrets.toml!")
+    st.stop()
 
 
+# ---------- Fungsi Ekstraksi via AI ----------
 @st.cache_data(show_spinner=False, max_entries=30)
-def proses(data: bytes, mode: str, bahasa: str, psm: int, yang_dibaca: str):
-    arr = preprocess(data, mode)
-    config = f"--oem 3 --psm {psm}"
-    
-    if yang_dibaca == "Hanya angka":
-        config += ' -c tessedit_char_whitelist="0123456789.,-/: "'
+def proses_dengan_ai(image_bytes: bytes):
+    """Mengirim gambar ke Gemini AI dan memintanya mengembalikan format JSON"""
+    try:
+        # Konversi bytes ke gambar PIL
+        img = Image.open(io.BytesIO(image_bytes))
         
-    teks = pytesseract.image_to_string(arr, lang=bahasa, config=config).strip()
-    return arr, teks
+        # PROMPT (Perintah) untuk AI: Kita beri tahu dia cara kerjanya layaknya manusia
+        prompt = """
+        Anda adalah asisten akuntan yang sangat teliti. Baca struk setoran BCA dalam gambar ini.
+        Abaikan coretan pulpen, abaikan kertas lain di latar belakang, fokus HANYA pada cetakan struk.
+        
+        Tugas Anda:
+        1. Cari nilai "TOTAL SETORAN" (pastikan angkanya benar, abaikan teks Rp atau koma/titik). Format menjadi angka utuh (contoh: 73463900).
+        2. Cari Rincian Transaksi (NO REK, Nominal Rp, dan BERITA). Gabungkan menjadi teks per baris dengan format: "No. Rek: [rekening] | Rp.[nominal] | Berita: [berita]". Gunakan pemisah \n antar baris.
+        3. Kembalikan HANYA format JSON murni tanpa markdown tambahan.
+        
+        Format JSON yang wajib diikuti:
+        {
+            "Total Setoran": "angka total",
+            "Rincian Transaksi": "teks rincian"
+        }
+        """
+        
+        # Kirim ke AI (Minta kembalian dalam bentuk JSON yang rapi)
+        response = model.generate_content(
+            [prompt, img],
+            generation_config=genai.GenerationConfig(
+                response_mime_type="application/json"
+            )
+        )
+        
+        # Ubah respon JSON dari AI menjadi Dictionary Python
+        data_json = json.loads(response.text)
+        return data_json
+        
+    except Exception as e:
+        return {"error": str(e)}
 
 
-def cari_info(teks: str) -> dict:
-    info = {}
-    
-    # ==============================================================================
-    # 1. Ekstrak Total Setoran (LOGIKA TAHAN BANTING)
-    # Logika ini melompati kata/angka acak apapun (seperti '08' atau '100' dari kertas belakang)
-    # dan HANYA akan berhenti pada deret angka format uang (\d{1,3}(?:[., ]\d{3})+)
-    # ATAU angka lurus tanpa jeda minimal 5 digit (\d{5,}).
-    # ==============================================================================
-    match_total = re.search(r"TOTAL\s+SETORAN.*?(\d{1,3}(?:[., ]\d{3})+|\d{5,})", teks, flags=re.IGNORECASE | re.DOTALL)
-    
-    if match_total:
-        # Jika ketemu, kita buang spasinya jika OCR salah baca titik/koma jadi spasi
-        total_bersih = match_total.group(1).replace(" ", "").strip(".,")
-        info["Total Setoran"] = total_bersih
-            
-    # ==============================================================================
-    # 2. Ekstrak Blok Rincian (NO REK, Nominal, dan BERITA)
-    # ==============================================================================
-    rincian_rek = re.findall(r"NO\s*REK\s*:\s*([0-9*]+)[^\dRp]*(?:Rp\.?\s*)?([0-9.,]+)", teks, re.IGNORECASE)
-    rincian_berita = re.findall(r"BERITA\s+(.+)", teks, re.IGNORECASE)
-    
-    if rincian_rek:
-        hasil_rincian = []
-        for i in range(len(rincian_rek)):
-            rek = rincian_rek[i][0]
-            nominal = rincian_rek[i][1]
-            berita = rincian_berita[i].strip() if i < len(rincian_berita) else "-"
-            hasil_rincian.append(f"No. Rek: {rek} | Rp.{nominal} | Berita: {berita}")
-            
-        info["Rincian Transaksi"] = "\n".join(hasil_rincian)
-
-    return info
-
-
+# ---------- Fungsi Simpan ke Google Sheet ----------
 def simpan_ke_sheet(rows: list) -> tuple:
     try:
         url = st.secrets["APPS_SCRIPT_URL"]
         token = st.secrets["APPS_SCRIPT_TOKEN"]
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False, "Secrets belum diisi (APPS_SCRIPT_URL dan APPS_SCRIPT_TOKEN)."
     try:
         resp = requests.post(
@@ -152,7 +90,7 @@ def simpan_ke_sheet(rows: list) -> tuple:
             timeout=60,
         )
         hasil_json = resp.json()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return False, f"Gagal terhubung: {e}"
     if hasil_json.get("ok"):
         return True, f"{hasil_json.get('count', 0)} baris tersimpan."
@@ -162,7 +100,7 @@ def simpan_ke_sheet(rows: list) -> tuple:
 # ---------- Upload & Kamera ----------
 files = st.file_uploader(
     "Pilih foto struk:",
-    type=["jpg", "jpeg", "png", "webp", "bmp", "heic", "heif"],
+    type=["jpg", "jpeg", "png", "webp", "heic"],
     accept_multiple_files=True,
 )
 items = [(f.name, f.getvalue()) for f in (files or [])]
@@ -180,39 +118,33 @@ if not items:
 hasil = []
 for i, (nama, data) in enumerate(items, start=1):
     with st.expander(f"Hasil: {nama}", expanded=True):
-        try:
-            with st.spinner("Sedang memproses struk..."):
-                arr, teks = proses(data, mode, bahasa, psm_value, yang_dibaca)
-        except pytesseract.TesseractNotFoundError:
-            st.error("Tesseract belum terpasang. Pastikan file packages.txt ada di server/GitHub.")
-            st.stop()
-        except Exception as e:  # noqa: BLE001
-            st.error(f"Gagal membaca {nama}: {e}")
-            continue
-
-        st.image(arr, caption=f"Gambar diproses mode: {mode}", use_container_width=True)
+        st.image(data, caption="Gambar yang dianalisis AI", use_container_width=True)
         
-        # Teks Mentah (Read-Only)
-        st.markdown("**Teks Mentah Terbaca (Read-Only):**")
-        st.code(teks, language="text") 
-        
-        info = cari_info(teks) if cari_data else {}
-        
-        # Tampilkan ekstraksi data di UI
-        if info:
-            st.markdown("### 📌 Data Laporan Terdeteksi:")
+        with st.spinner("🤖 AI sedang membaca dan memahami struk..."):
+            info = proses_dengan_ai(data)
             
-            if info.get("Rincian Transaksi"):
-                st.markdown("**📝 Rincian Penyetoran:**")
-                for rincian in info["Rincian Transaksi"].split("\n"):
-                    st.info(rincian)
-                    
-            if info.get("Total Setoran"):
-                st.success(f"**💰 TOTAL SETORAN:** Rp. {info['Total Setoran']}")
-            else:
-                st.warning("⚠️ Nominal Total Setoran tidak terbaca.")
-                    
-        hasil.append({"File": nama, "Teks Mentah": teks, **info})
+        if "error" in info:
+            st.error(f"Gagal memproses gambar: {info['error']}")
+            continue
+            
+        # Tampilkan ekstraksi data di UI
+        st.markdown("### 📌 Data Laporan Terdeteksi:")
+        
+        if info.get("Rincian Transaksi"):
+            st.markdown("**📝 Rincian Penyetoran:**")
+            for rincian in info["Rincian Transaksi"].split("\n"):
+                st.info(rincian)
+                
+        if info.get("Total Setoran"):
+            st.success(f"**💰 TOTAL SETORAN:** Rp. {info['Total Setoran']}")
+        else:
+            st.warning("⚠️ Nominal Total Setoran tidak ditemukan oleh AI.")
+                
+        hasil.append({
+            "File": nama, 
+            "Total Setoran": info.get("Total Setoran", ""),
+            "Rincian Transaksi": info.get("Rincian Transaksi", "")
+        })
 
 # ---------- Unduh & Simpan ----------
 if hasil:
@@ -225,24 +157,3 @@ if hasil:
         with st.spinner("Menyimpan ke Google Sheets..."):
             ok, pesan = simpan_ke_sheet(hasil)
         (st.success if ok else st.error)(pesan)
-        
-    col1, col2 = st.columns(2)
-    with col1:
-        st.download_button(
-            "⬇️ Unduh CSV",
-            df.to_csv(index=False).encode("utf-8-sig"),
-            "laporan_setoran.csv",
-            "text/csv",
-            use_container_width=True,
-        )
-    with col2:
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine="openpyxl") as w:
-            df.to_excel(w, index=False)
-        st.download_button(
-            "⬇️ Unduh Excel",
-            buf.getvalue(),
-            "laporan_setoran.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
