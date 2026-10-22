@@ -106,21 +106,22 @@ def proses(data: bytes, mode: str, bahasa: str, psm: int, yang_dibaca: str):
 def cari_info(teks: str) -> dict:
     info = {}
     
-    # 1. Ekstrak Total Setoran (Diperbarui dengan Filter "Rp" dan Panjang Karakter)
-    # Logika A: Cari "TOTAL SETORAN", lompat apapun sampai ketemu "Rp", lalu ambil angkanya
-    match_total = re.search(r"TOTAL\s+SETORAN[\s\S]*?Rp\.?\s*([0-9.,]+)", teks, re.IGNORECASE)
+    # ==============================================================================
+    # 1. Ekstrak Total Setoran (LOGIKA TAHAN BANTING)
+    # Logika ini melompati kata/angka acak apapun (seperti '08' atau '100' dari kertas belakang)
+    # dan HANYA akan berhenti pada deret angka format uang (\d{1,3}(?:[., ]\d{3})+)
+    # ATAU angka lurus tanpa jeda minimal 5 digit (\d{5,}).
+    # ==============================================================================
+    match_total = re.search(r"TOTAL\s+SETORAN.*?(\d{1,3}(?:[., ]\d{3})+|\d{5,})", teks, flags=re.IGNORECASE | re.DOTALL)
     
     if match_total:
-        total_bersih = match_total.group(1).strip(".,")
+        # Jika ketemu, kita buang spasinya jika OCR salah baca titik/koma jadi spasi
+        total_bersih = match_total.group(1).replace(" ", "").strip(".,")
         info["Total Setoran"] = total_bersih
-    else:
-        # Logika B (Cadangan jika 'Rp' tidak terbaca): 
-        # Cari angka pertama yang PANJANGNYA minimal 4 digit (mencegah salah ambil angka 100 atau 08)
-        match_fallback = re.search(r"TOTAL\s+SETORAN[^\d]*([0-9.,]{4,})", teks, re.IGNORECASE)
-        if match_fallback:
-            info["Total Setoran"] = match_fallback.group(1).strip(".,")
             
+    # ==============================================================================
     # 2. Ekstrak Blok Rincian (NO REK, Nominal, dan BERITA)
+    # ==============================================================================
     rincian_rek = re.findall(r"NO\s*REK\s*:\s*([0-9*]+)[^\dRp]*(?:Rp\.?\s*)?([0-9.,]+)", teks, re.IGNORECASE)
     rincian_berita = re.findall(r"BERITA\s+(.+)", teks, re.IGNORECASE)
     
@@ -209,7 +210,7 @@ for i, (nama, data) in enumerate(items, start=1):
             if info.get("Total Setoran"):
                 st.success(f"**💰 TOTAL SETORAN:** Rp. {info['Total Setoran']}")
             else:
-                st.warning("⚠️ Nominal Total Setoran tidak terbaca jelas.")
+                st.warning("⚠️ Nominal Total Setoran tidak terbaca.")
                     
         hasil.append({"File": nama, "Teks Mentah": teks, **info})
 
