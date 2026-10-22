@@ -28,7 +28,7 @@ st.set_page_config(
 )
 
 st.title("📷 Scanner Laporan Setoran")
-st.caption("Upload foto struk, sistem akan mengekstrak Rincian dan Total Setoran.")
+st.caption("Upload foto struk, sistem akan otomatis mengekstrak Rincian dan Total Setoran.")
 
 # ---------- Pengaturan ----------
 with st.expander("⚙️ Pengaturan Pembacaan", expanded=False):
@@ -106,19 +106,12 @@ def proses(data: bytes, mode: str, bahasa: str, psm: int, yang_dibaca: str):
 def cari_info(teks: str) -> dict:
     info = {}
     
-    # 1. Ekstrak Total Setoran (Diperbarui agar mengambil SEMUA angka di baris tersebut)
-    # Mencari baris yang mengandung kata TOTAL SETORAN
-    baris_total = [line for line in teks.split('\n') if re.search(r"TOTAL\s+SETORAN", line, re.IGNORECASE)]
-    if baris_total:
-        # Ambil teks di sebelah kanan kata "TOTAL SETORAN"
-        teks_kanan = re.split(r"TOTAL\s+SETORAN", baris_total[0], flags=re.IGNORECASE)[-1]
-        
-        # Cari semua grup angka (termasuk titik dan koma)
-        kumpulan_angka = re.findall(r"[0-9.,]+", teks_kanan)
-        if kumpulan_angka:
-            # Gabungkan menjadi satu (menghindari angka terputus karena ada spasi hasil OCR)
-            total_bersih = "".join(kumpulan_angka).strip(".,")
-            info["Total Setoran"] = total_bersih
+    # 1. Ekstrak Total Setoran (Diperbarui agar bisa melompat ke baris bawah / melewati enter & spasi)
+    # [^\d]* berfungsi mengabaikan spasi, baris baru, atau huruf 'Rp.' sampai menemukan angka pertama
+    match_total = re.search(r"TOTAL\s+SETORAN[^\d]*([0-9.,]+)", teks, re.IGNORECASE)
+    if match_total:
+        total_bersih = match_total.group(1).strip(".,")
+        info["Total Setoran"] = total_bersih
             
     # 2. Ekstrak Blok Rincian (NO REK, Nominal, dan BERITA)
     rincian_rek = re.findall(r"NO\s*REK\s*:\s*([0-9*]+)[^\dRp]*(?:Rp\.?\s*)?([0-9.,]+)", teks, re.IGNORECASE)
@@ -191,7 +184,7 @@ for i, (nama, data) in enumerate(items, start=1):
 
         st.image(arr, caption=f"Gambar diproses mode: {mode}", use_container_width=True)
         
-        # Teks Mentah (Read-Only)
+        # Teks Mentah (Read-Only) - Tidak bisa diedit user
         st.markdown("**Teks Mentah Terbaca (Read-Only):**")
         st.code(teks, language="text") 
         
@@ -208,6 +201,8 @@ for i, (nama, data) in enumerate(items, start=1):
                     
             if info.get("Total Setoran"):
                 st.success(f"**💰 TOTAL SETORAN:** Rp. {info['Total Setoran']}")
+            else:
+                st.warning("⚠️ Nominal Total Setoran tidak terbaca jelas. Pastikan angka tidak tertutup coretan pulpen.")
                     
         hasil.append({"File": nama, "Teks Mentah": teks, **info})
 
