@@ -106,12 +106,19 @@ def proses(data: bytes, mode: str, bahasa: str, psm: int, yang_dibaca: str):
 def cari_info(teks: str) -> dict:
     info = {}
     
-    # 1. Ekstrak Total Setoran (Diperbarui agar bisa melompat ke baris bawah / melewati enter & spasi)
-    # [^\d]* berfungsi mengabaikan spasi, baris baru, atau huruf 'Rp.' sampai menemukan angka pertama
-    match_total = re.search(r"TOTAL\s+SETORAN[^\d]*([0-9.,]+)", teks, re.IGNORECASE)
+    # 1. Ekstrak Total Setoran (Diperbarui dengan Filter "Rp" dan Panjang Karakter)
+    # Logika A: Cari "TOTAL SETORAN", lompat apapun sampai ketemu "Rp", lalu ambil angkanya
+    match_total = re.search(r"TOTAL\s+SETORAN[\s\S]*?Rp\.?\s*([0-9.,]+)", teks, re.IGNORECASE)
+    
     if match_total:
         total_bersih = match_total.group(1).strip(".,")
         info["Total Setoran"] = total_bersih
+    else:
+        # Logika B (Cadangan jika 'Rp' tidak terbaca): 
+        # Cari angka pertama yang PANJANGNYA minimal 4 digit (mencegah salah ambil angka 100 atau 08)
+        match_fallback = re.search(r"TOTAL\s+SETORAN[^\d]*([0-9.,]{4,})", teks, re.IGNORECASE)
+        if match_fallback:
+            info["Total Setoran"] = match_fallback.group(1).strip(".,")
             
     # 2. Ekstrak Blok Rincian (NO REK, Nominal, dan BERITA)
     rincian_rek = re.findall(r"NO\s*REK\s*:\s*([0-9*]+)[^\dRp]*(?:Rp\.?\s*)?([0-9.,]+)", teks, re.IGNORECASE)
@@ -184,7 +191,7 @@ for i, (nama, data) in enumerate(items, start=1):
 
         st.image(arr, caption=f"Gambar diproses mode: {mode}", use_container_width=True)
         
-        # Teks Mentah (Read-Only) - Tidak bisa diedit user
+        # Teks Mentah (Read-Only)
         st.markdown("**Teks Mentah Terbaca (Read-Only):**")
         st.code(teks, language="text") 
         
@@ -202,7 +209,7 @@ for i, (nama, data) in enumerate(items, start=1):
             if info.get("Total Setoran"):
                 st.success(f"**💰 TOTAL SETORAN:** Rp. {info['Total Setoran']}")
             else:
-                st.warning("⚠️ Nominal Total Setoran tidak terbaca jelas. Pastikan angka tidak tertutup coretan pulpen.")
+                st.warning("⚠️ Nominal Total Setoran tidak terbaca jelas.")
                     
         hasil.append({"File": nama, "Teks Mentah": teks, **info})
 
