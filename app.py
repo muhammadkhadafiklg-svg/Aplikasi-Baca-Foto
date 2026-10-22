@@ -1,5 +1,4 @@
-"""Scanner Laporan Setoran - Powered by Gemini AI
-Lebih akurat, anti-coretan, dan memahami konteks struk.
+"""Scanner Laporan Setoran - Powered by Gemini AI (Auto-Detect Model)
 """
 import io
 import json
@@ -7,8 +6,6 @@ import pandas as pd
 import requests
 import streamlit as st
 from PIL import Image
-
-# Import library Google Gemini
 import google.generativeai as genai
 
 st.set_page_config(
@@ -21,28 +18,52 @@ st.set_page_config(
 st.title("🤖 Scanner Laporan (Gemini AI)")
 st.caption("Upload foto struk. AI akan menembus coretan dan mencari nominal secara cerdas.")
 
-# ---------- Konfigurasi AI ----------
+# ---------- Konfigurasi AI & Auto-Detect Model ----------
 try:
-    # Mengambil API Key dari secrets
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # Menggunakan model Gemini 1.5 Flash (Sangat cepat dan jago baca gambar)
-    model = genai.GenerativeModel('gemini-pro-vision')
+    # 1. Tarik semua model yang diizinkan untuk API Key ini
+    available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    
+    if not available_models:
+        st.error("⚠️ API Key Anda valid, tetapi tidak memiliki akses ke model apa pun. Silakan buat API Key baru di Google AI Studio.")
+        st.stop()
+        
+    # 2. Pilih model otomatis (Prioritas: flash -> pro -> vision -> apapun yang ada)
+    pilihan_model = None
+    for target in ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro-vision', 'gemini-1.0-pro-vision']:
+        for m_name in available_models:
+            if target in m_name:
+                pilihan_model = m_name
+                break
+        if pilihan_model:
+            break
+            
+    if not pilihan_model:
+        pilihan_model = available_models[0] # Ambil sembarang model jika tidak ada yang cocok
+        
+    # Bersihkan nama (Hapus prefix 'models/')
+    if pilihan_model.startswith("models/"):
+        pilihan_model = pilihan_model.replace("models/", "")
+        
+    model = genai.GenerativeModel(pilihan_model)
+    st.sidebar.success(f"🤖 Model Aktif: {pilihan_model}")
+    
+except KeyError:
+    st.error("⚠️ GEMINI_API_KEY belum dipasang di rahasia (Secrets) Streamlit!")
+    st.stop()
 except Exception as e:
-    st.error("⚠️ GEMINI_API_KEY belum dipasang di secrets.toml!")
+    st.error(f"⚠️ Gagal menghubungkan ke Server Google: {e}")
     st.stop()
 
 
 # ---------- Fungsi Ekstraksi via AI ----------
 @st.cache_data(show_spinner=False, max_entries=30)
 def proses_dengan_ai(image_bytes: bytes):
-    """Mengirim gambar ke Gemini AI dan memintanya mengembalikan format JSON"""
     try:
-        # Konversi bytes ke gambar PIL
         img = Image.open(io.BytesIO(image_bytes))
         
-        # PROMPT (Perintah) untuk AI: Kita beri tahu dia cara kerjanya layaknya manusia
         prompt = """
         Anda adalah asisten akuntan yang sangat teliti. Baca struk setoran BCA dalam gambar ini.
         Abaikan coretan pulpen, abaikan kertas lain di latar belakang, fokus HANYA pada cetakan struk.
@@ -50,25 +71,28 @@ def proses_dengan_ai(image_bytes: bytes):
         Tugas Anda:
         1. Cari nilai "TOTAL SETORAN" (pastikan angkanya benar, abaikan teks Rp atau koma/titik). Format menjadi angka utuh (contoh: 73463900).
         2. Cari Rincian Transaksi (NO REK, Nominal Rp, dan BERITA). Gabungkan menjadi teks per baris dengan format: "No. Rek: [rekening] | Rp.[nominal] | Berita: [berita]". Gunakan pemisah \n antar baris.
-        3. Kembalikan HANYA format JSON murni tanpa markdown tambahan.
+        3. Kembalikan HANYA format JSON murni.
         
-        Format JSON yang wajib diikuti:
+        Format JSON yang wajib diikuti (jangan tambahkan tulisan apapun selain JSON ini):
         {
             "Total Setoran": "angka total",
             "Rincian Transaksi": "teks rincian"
         }
         """
         
-        # Kirim ke AI (Minta kembalian dalam bentuk JSON yang rapi)
-        response = model.generate_content(
-            [prompt, img],
-            generation_config=genai.GenerationConfig(
-                response_mime_type="application/json"
-            )
-        )
+        # Kirim ke AI
+        response = model.generate_content([prompt, img])
         
-        # Ubah respon JSON dari AI menjadi Dictionary Python
-        data_json = json.loads(response.text)
+        # Pembersihan ekstra agar kompatibel dengan semua model lama/baru
+        raw_text = response.text.strip()
+        if raw_text.startswith("```json"):
+            raw_text = raw_text[7:]
+        if raw_text.startswith("```"):
+            raw_text = raw_text[3:]
+        if raw_text.endswith("```"):
+            raw_text = raw_text[:-3]
+            
+        data_json = json.loads(raw_text.strip())
         return data_json
         
     except Exception as e:
