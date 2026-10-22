@@ -106,15 +106,22 @@ def proses(data: bytes, mode: str, bahasa: str, psm: int, yang_dibaca: str):
 def cari_info(teks: str) -> dict:
     info = {}
     
-    # 1. Ekstrak Total Setoran
-    match_total = re.search(r"TOTAL\s+SETORAN[^\d]*([0-9.,]+)", teks, re.IGNORECASE)
-    if match_total:
-        info["Total Setoran"] = match_total.group(1).strip()
+    # 1. Ekstrak Total Setoran (Diperbarui agar mengambil SEMUA angka di baris tersebut)
+    # Mencari baris yang mengandung kata TOTAL SETORAN
+    baris_total = [line for line in teks.split('\n') if re.search(r"TOTAL\s+SETORAN", line, re.IGNORECASE)]
+    if baris_total:
+        # Ambil teks di sebelah kanan kata "TOTAL SETORAN"
+        teks_kanan = re.split(r"TOTAL\s+SETORAN", baris_total[0], flags=re.IGNORECASE)[-1]
         
+        # Cari semua grup angka (termasuk titik dan koma)
+        kumpulan_angka = re.findall(r"[0-9.,]+", teks_kanan)
+        if kumpulan_angka:
+            # Gabungkan menjadi satu (menghindari angka terputus karena ada spasi hasil OCR)
+            total_bersih = "".join(kumpulan_angka).strip(".,")
+            info["Total Setoran"] = total_bersih
+            
     # 2. Ekstrak Blok Rincian (NO REK, Nominal, dan BERITA)
-    # Mencari pola "NO REK : xxx" dan "Rp. yyy"
     rincian_rek = re.findall(r"NO\s*REK\s*:\s*([0-9*]+)[^\dRp]*(?:Rp\.?\s*)?([0-9.,]+)", teks, re.IGNORECASE)
-    # Mencari pola "BERITA zzz"
     rincian_berita = re.findall(r"BERITA\s+(.+)", teks, re.IGNORECASE)
     
     if rincian_rek:
@@ -122,10 +129,7 @@ def cari_info(teks: str) -> dict:
         for i in range(len(rincian_rek)):
             rek = rincian_rek[i][0]
             nominal = rincian_rek[i][1]
-            # Pasangkan dengan baris BERITA jika ada, jika tidak isi dengan "-"
             berita = rincian_berita[i].strip() if i < len(rincian_berita) else "-"
-            
-            # Format teks ini yang akan muncul di layar dan masuk ke kolom Excel/CSV
             hasil_rincian.append(f"No. Rek: {rek} | Rp.{nominal} | Berita: {berita}")
             
         info["Rincian Transaksi"] = "\n".join(hasil_rincian)
@@ -199,7 +203,6 @@ for i, (nama, data) in enumerate(items, start=1):
             
             if info.get("Rincian Transaksi"):
                 st.markdown("**📝 Rincian Penyetoran:**")
-                # Menampilkan rincian sebagai bullet points agar rapi di layar
                 for rincian in info["Rincian Transaksi"].split("\n"):
                     st.info(rincian)
                     
