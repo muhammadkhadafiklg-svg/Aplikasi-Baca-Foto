@@ -1,9 +1,5 @@
 streamlit
-pytesseract
-opencv-python-headless
-Pillow
-numpy
 pandas
-openpyxl
-pillow-heif
 requests
+Pillow
+google-generativeai
