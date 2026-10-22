@@ -1,4 +1,4 @@
-"""Scanner Laporan Setoran - Powered by Gemini AI (Auto-Detect Model)
+"""Scanner Laporan Setoran - Powered by Gemini AI (Versi 3.8 Flash)
 """
 import io
 import json
@@ -18,37 +18,13 @@ st.set_page_config(
 st.title("🤖 Scanner Laporan (Gemini AI)")
 st.caption("Upload foto struk. AI akan menembus coretan dan mencari nominal secara cerdas.")
 
-# ---------- Konfigurasi AI & Auto-Detect Model ----------
+# ---------- Konfigurasi AI (Update ke versi terbaru) ----------
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # 1. Tarik semua model yang diizinkan untuk API Key ini
-    available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    
-    if not available_models:
-        st.error("⚠️ API Key Anda valid, tetapi tidak memiliki akses ke model apa pun. Silakan buat API Key baru di Google AI Studio.")
-        st.stop()
-        
-    # 2. Pilih model otomatis (Prioritas: flash -> pro -> vision -> apapun yang ada)
-    pilihan_model = None
-    for target in ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro-vision', 'gemini-1.0-pro-vision']:
-        for m_name in available_models:
-            if target in m_name:
-                pilihan_model = m_name
-                break
-        if pilihan_model:
-            break
-            
-    if not pilihan_model:
-        pilihan_model = available_models[0] # Ambil sembarang model jika tidak ada yang cocok
-        
-    # Bersihkan nama (Hapus prefix 'models/')
-    if pilihan_model.startswith("models/"):
-        pilihan_model = pilihan_model.replace("models/", "")
-        
-    model = genai.GenerativeModel(pilihan_model)
-    st.sidebar.success(f"🤖 Model Aktif: {pilihan_model}")
+    # Langsung gunakan model terbaru sesuai petunjuk error dari Google
+    model = genai.GenerativeModel('gemini-3.8-flash')
     
 except KeyError:
     st.error("⚠️ GEMINI_API_KEY belum dipasang di rahasia (Secrets) Streamlit!")
@@ -83,7 +59,7 @@ def proses_dengan_ai(image_bytes: bytes):
         # Kirim ke AI
         response = model.generate_content([prompt, img])
         
-        # Pembersihan ekstra agar kompatibel dengan semua model lama/baru
+        # Pembersihan teks JSON agar aman dibaca aplikasi
         raw_text = response.text.strip()
         if raw_text.startswith("```json"):
             raw_text = raw_text[7:]
