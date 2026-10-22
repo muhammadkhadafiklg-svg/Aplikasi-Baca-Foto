@@ -9,13 +9,13 @@ from PIL import Image
 import google.generativeai as genai
 
 st.set_page_config(
-    page_title="Scanner Laporan Setoran (AI)",
+    page_title="Scanner Laporan Omset Cash",
     page_icon="🤖",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
 
-st.title("🤖 Scanner Laporan (Gemini AI)")
+st.title("🤖 Scanner Laporan Omset cash")
 st.caption("Upload foto struk. AI akan menembus coretan dan mencari nominal secara cerdas.")
 
 # ---------- Konfigurasi AI (Update ke versi terbaru) ----------
