@@ -21,43 +21,43 @@ except Exception:  # noqa: BLE001
     pass
 
 st.set_page_config(
-    page_title="Baca Foto",
+    page_title="Scanner Laporan Setoran",
     page_icon="📷",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
 
-st.title("📷 Baca Foto")
-st.caption("Upload foto dari HP, atau gunakan kamera langsung untuk ambil teks/angka.")
+st.title("📷 Scanner Laporan Setoran")
+st.caption("Upload foto struk, sistem akan otomatis mengekstrak Total Setoran.")
 
 # ---------- Pengaturan ----------
-with st.expander("⚙️ Pengaturan (Buka untuk setel kamera)", expanded=False):
+with st.expander("⚙️ Pengaturan Pembacaan", expanded=False):
     yang_dibaca = st.radio(
         "Yang dibaca",
         ["Teks + angka", "Hanya angka"],
         horizontal=True,
-        help="'Hanya angka' lebih akurat untuk nominal, nomor, atau meteran.",
+        index=0, # Wajib Teks + Angka agar bisa membaca kata "TOTAL SETORAN"
+        help="Gunakan 'Teks + angka' agar sistem bisa mengenali format struk.",
     )
     mode = st.radio(
         "Pra-proses gambar",
         ["Asli", "Grayscale", "Hitam-putih"],
-        index=1, # Diubah default ke Grayscale agar lebih ramah kamera web HP
+        index=1, 
         horizontal=True,
-        help="Gunakan 'Grayscale' untuk hasil kamera HP langsung.",
     )
     bahasa = st.selectbox("Bahasa teks di foto", ["ind+eng", "ind", "eng"])
     psm_label = st.selectbox(
         "Jenis tata letak",
         [
-            "6 - Blok teks (Default)", 
-            "11 - Teks tersebar (Bagus untuk kamera)", 
+            "6 - Blok teks (Default Struk)", 
             "4 - Kolom", 
+            "11 - Teks tersebar",
             "3 - Otomatis"
         ],
         index=0
     )
     psm_value = int(psm_label.split(" ")[0])
-    cari_data = st.checkbox("Cari tanggal & nominal otomatis", value=True)
+    cari_data = st.checkbox("Otomatis ekstrak format struk", value=True)
 
 
 # ---------- Fungsi ----------
@@ -66,33 +66,26 @@ def preprocess(data: bytes, mode: str) -> np.ndarray:
     img = ImageOps.exif_transpose(img).convert("RGB")
     arr = np.array(img)
     
-    # 1. Perbaikan Resolusi khusus Kamera Web
     h, w = arr.shape[:2]
     sisi_panjang = max(h, w)
     if sisi_panjang > 2000:  
-        # Kecilkan jika foto terlalu besar agar cepat
         s = 2000 / sisi_panjang
         arr = cv2.resize(arr, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
     elif sisi_panjang < 1200: 
-        # Perbesar paksa resolusi kamera web agar OCR bisa membaca pixelnya
         s = 1500 / sisi_panjang 
         arr = cv2.resize(arr, None, fx=s, fy=s, interpolation=cv2.INTER_CUBIC)
         
     if mode == "Asli":
         return arr
         
-    # 2. Ubah ke Grayscale
     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
     
-    # 3. Tambahkan CLAHE (Peningkatan Kontras Otomatis)
-    # Sangat ampuh meratakan pencahayaan gelap/berbayang dari kamera HP
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
     
     if mode == "Grayscale":
         return gray
         
-    # 4. Filter Noise Kamera dan Hitam-Putih (Adaptive Threshold)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
     return cv2.adaptiveThreshold(
         gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 11
@@ -105,7 +98,6 @@ def proses(data: bytes, mode: str, bahasa: str, psm: int, yang_dibaca: str):
     config = f"--oem 3 --psm {psm}"
     
     if yang_dibaca == "Hanya angka":
-        # Spasi di akhir whitelist penting agar angka tidak saling menempel
         config += ' -c tessedit_char_whitelist="0123456789.,-/: "'
         
     teks = pytesseract.image_to_string(arr, lang=bahasa, config=config).strip()
@@ -113,18 +105,38 @@ def proses(data: bytes, mode: str, bahasa: str, psm: int, yang_dibaca: str):
 
 
 def cari_info(teks: str) -> dict:
-    tanggal = re.findall(r"\b\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}\b", teks)
-    nominal = re.findall(r"(?:Rp\.?\s?)?\d{1,3}(?:[.,]\d{3})+(?:,\d{2})?", teks)
+    info = {}
     
-    # Menggunakan \n agar hasil yang diekstrak tampil berjejer ke bawah
-    return {
-        "Tanggal": "\n".join(dict.fromkeys(tanggal)),
-        "Nominal": "\n".join(dict.fromkeys(n.strip() for n in nominal)),
-    }
+    # 1. Ekstrak Tanggal Khusus Format Struk (misal: 15 OCT,26)
+    match_tgl = re.search(r"DATE/?TIME[^\d]*([0-9]{1,2}\s*[A-Za-z]{3}\s*,\s*[0-9]{2,4})", teks, re.IGNORECASE)
+    if match_tgl:
+        info["Tanggal"] = match_tgl.group(1).strip()
+    else:
+        # Fallback format tanggal standar
+        tanggal = re.findall(r"\b\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}\b", teks)
+        if tanggal:
+            info["Tanggal"] = "\n".join(dict.fromkeys(tanggal))
+            
+    # 2. Ekstrak JOB ID (Referensi Struk)
+    match_job = re.search(r"JOB\s+ID[^\d]*([0-9]+)", teks, re.IGNORECASE)
+    if match_job:
+        info["Job ID"] = match_job.group(1).strip()
+
+    # 3. Ekstrak TOTAL SETORAN
+    # Mencari kata "TOTAL SETORAN", mengabaikan teks di antaranya (seperti Rp.), dan mengambil angkanya
+    match_total = re.search(r"TOTAL\s+SETORAN[^\d]*([0-9.,]+)", teks, re.IGNORECASE)
+    if match_total:
+        info["Total Setoran"] = match_total.group(1).strip()
+    else:
+        # Jika "TOTAL SETORAN" tidak terbaca jelas, cari dan tampilkan semua nominal sebagai cadangan
+        nominal = re.findall(r"(?:Rp\.?\s?)?\d{1,3}(?:[.,]\d{3})+(?:,\d{2})?", teks)
+        if nominal:
+            info["Semua Nominal Terbaca"] = "\n".join(dict.fromkeys(n.strip() for n in nominal))
+
+    return info
 
 
 def simpan_ke_sheet(rows: list) -> tuple:
-    """Kirim data ke Google Apps Script -> Google Sheet."""
     try:
         url = st.secrets["APPS_SCRIPT_URL"]
         token = st.secrets["APPS_SCRIPT_TOKEN"]
@@ -147,7 +159,7 @@ def simpan_ke_sheet(rows: list) -> tuple:
 
 # ---------- Upload & Kamera ----------
 files = st.file_uploader(
-    "Pilih foto dari galeri:",
+    "Pilih foto struk:",
     type=["jpg", "jpeg", "png", "webp", "bmp", "heic", "heif"],
     accept_multiple_files=True,
 )
@@ -159,7 +171,7 @@ with st.expander("📸 Atau gunakan kamera langsung"):
         items.append(("kamera_langsung.jpg", kamera.getvalue()))
 
 if not items:
-    st.info("Upload gambar atau gunakan kamera untuk memulai.")
+    st.info("Upload gambar atau gunakan kamera untuk memulai scan laporan.")
     st.stop()
 
 # ---------- Proses ----------
@@ -167,7 +179,7 @@ hasil = []
 for i, (nama, data) in enumerate(items, start=1):
     with st.expander(f"Hasil: {nama}", expanded=True):
         try:
-            with st.spinner("Sedang memproses gambar..."):
+            with st.spinner("Sedang memproses struk..."):
                 arr, teks = proses(data, mode, bahasa, psm_value, yang_dibaca)
         except pytesseract.TesseractNotFoundError:
             st.error("Tesseract belum terpasang. Pastikan file packages.txt ada di server/GitHub.")
@@ -177,30 +189,40 @@ for i, (nama, data) in enumerate(items, start=1):
             continue
 
         st.image(arr, caption=f"Gambar diproses mode: {mode}", use_container_width=True)
-        teks_edit = st.text_area("Teks Lengkap (Bisa diedit manual)", teks, height=150, key=f"t{i}")
         
-        info = cari_info(teks_edit) if cari_data else {}
+        # --- PERUBAHAN UTAMA: Teks Dibuat Read-Only (Tidak bisa diedit) ---
+        st.markdown("**Teks Mentah Terbaca (Read-Only):**")
+        st.code(teks, language="text") 
+        # -------------------------------------------------------------------
         
-        # Tampilkan ekstraksi data dengan rapi (berjejer ke bawah)
+        info = cari_info(teks) if cari_data else {}
+        
+        # Tampilkan ekstraksi data dengan rapi
         if info:
-            st.markdown("### 📌 Deteksi Angka & Tanggal:")
+            st.markdown("### 📌 Data Laporan Terdeteksi:")
+            
             if info.get("Tanggal"):
-                st.markdown("**📅 Tanggal:**")
-                for tgl in info["Tanggal"].split("\n"):
-                    st.markdown(f"- {tgl}")
-                    
-            if info.get("Nominal"):
-                st.markdown("**💰 Nominal:**")
-                for nom in info["Nominal"].split("\n"):
+                st.info(f"**📅 Tanggal Struk:** {info['Tanggal']}")
+                
+            if info.get("Job ID"):
+                st.info(f"**🆔 Job ID:** {info['Job ID']}")
+                
+            if info.get("Total Setoran"):
+                st.success(f"**💰 TOTAL SETORAN:** Rp. {info['Total Setoran']}")
+            elif info.get("Semua Nominal Terbaca"):
+                st.warning("**⚠️ Baris 'TOTAL SETORAN' tidak terbaca jelas. Berikut nominal yang ditemukan:**")
+                for nom in info["Semua Nominal Terbaca"].split("\n"):
                     st.markdown(f"- **{nom}**")
                     
-        hasil.append({"File": nama, "Teks": teks_edit, **info})
+        # Saat menyimpan hasil mentah, gabungkan teks agar aman di CSV
+        # Info spesifik juga otomatis jadi kolom baru di DataFrame!
+        hasil.append({"File": nama, "Teks Mentah": teks, **info})
 
 # ---------- Unduh & Simpan ----------
 if hasil:
     st.divider()
     df = pd.DataFrame(hasil)
-    st.subheader("Rekap Data")
+    st.subheader("Tabel Laporan")
     st.dataframe(df, use_container_width=True)
     
     if st.button("💾 Simpan ke Google Sheet", type="primary", use_container_width=True):
@@ -213,7 +235,7 @@ if hasil:
         st.download_button(
             "⬇️ Unduh CSV",
             df.to_csv(index=False).encode("utf-8-sig"),
-            "hasil_ocr.csv",
+            "laporan_setoran.csv",
             "text/csv",
             use_container_width=True,
         )
@@ -224,7 +246,7 @@ if hasil:
         st.download_button(
             "⬇️ Unduh Excel",
             buf.getvalue(),
-            "hasil_ocr.xlsx",
+            "laporan_setoran.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
